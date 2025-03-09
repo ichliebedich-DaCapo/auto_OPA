@@ -29,10 +29,10 @@ mutex results_mutex;
 atomic<int> processed(0);
 atomic<int> found_results(0);
 
-vector<double> generate_O_values(double x, double Vmax, double step)
+vector<double> generate_O_values(const double x, double Vmax, const double step)
 {
     vector<double> values;
-    double max_O = Vmax / x;
+    const double max_O = Vmax / x;
     for (double v = step; v <= max_O + 1e-9; v += step)
     {
         values.push_back(v);
@@ -40,10 +40,10 @@ vector<double> generate_O_values(double x, double Vmax, double step)
     return values;
 }
 
-void display_progress(int total, int found)
+void display_progress(const int total, const int found)
 {
     const float progress = static_cast<float>(processed) / total;
-    const int bar_width = 50;
+    constexpr int bar_width = 50;
     cout << BLUE << "\r[";
     const int pos = bar_width * progress;
     for (int i = 0; i < bar_width; ++i)
@@ -71,21 +71,21 @@ void display_thread_func(int total)
 
 void worker(const vector<pair<int, int> > &O1_combs, const vector<pair<int, int> > &O2_combs,
             const vector<double> &O1_values, const vector<double> &O2_values,
-            double x1, double x2, double Vmin, double Vmax, int total_O1_combs)
+            const double x1, const double x2, double Vmin, double Vmax, const int total_O1_combs)
 {
     while (true)
     {
-        int idx = processed.fetch_add(1);
+        const int idx = processed.fetch_add(1);
         if (idx >= total_O1_combs) break;
 
         const auto &[fst, snd] = O1_combs[idx];
         const double O1min = O1_values[fst];
         const double O1max = O1_values[snd];
 
-        for (auto &O2_pair: O2_combs)
+        for (const auto &[fst, snd]: O2_combs)
         {
-            const double O2min = O2_values[O2_pair.first];
-            const double O2max = O2_values[O2_pair.second];
+            const double O2min = O2_values[fst];
+            const double O2max = O2_values[snd];
 
             const double k1 = O1min * O2min;
             const double k2 = O1min * O2max;
