@@ -238,21 +238,6 @@ int main(int argc, char *argv[])
             out << "\n[" << zone[n] << "," << zone[n + 1] << "]\t\t"<<
                 "[" << gains[n] * zone[n] << "," << gains[n]*zone[n + 1] << "]";
         }
-        // double split_zone_low = x1;
-        // for (auto s: split_points)
-        // {
-        //     out <<"["<<split_zone_low<<","<< s << "] ";
-        //     split_zone_low = s;
-        // }
-        // out <<"["<<split_zone_low<<","<< x2 << "] ";
-        // // 增益区间范围
-        // out << "\nGains Zone: ";
-        // double gains_zone_low = x1;
-        // for (int n = 0; n < 4; ++n)
-        // {
-        //     out << "[" << gains[n] * gains_zone_low << "," << gains[n] * (n == 3 ? x2 : split_points[n]) << "] ";
-        //     gains_zone_low = split_points[n];
-        // }
         out << "\n\n";
     }
 
