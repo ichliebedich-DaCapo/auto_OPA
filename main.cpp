@@ -13,12 +13,11 @@ using namespace std;
 #define COLOR_CYAN    "\033[36m"
 #define COLOR_GREEN   "\033[32m"
 #define COLOR_YELLOW  "\033[33m"
-#define PROGRESS_BAR  COLOR_CYAN "#" COLOR_RESET
 
 // 配置参数
 const double MIN_GAIN = 1.0;
 const double MAX_GAIN = 100.0;
-const double EPSILON = 1e-6; // 浮点比较容差
+const double EPSILON = 1e-6;
 
 struct Config {
     double x1, x2;
@@ -39,7 +38,7 @@ struct Solution {
 
 void print_help() {
     cout << COLOR_YELLOW
-         << "Two-stage Amplifier Optimizer\n"
+         << "Two-stage Amplifier Optimizer (v2.1)\n"
          << COLOR_RESET "Usage: ./amplifier -i <in_min> <in_max> -o <out_min> <out_max> [options]\n\n"
          << "Required Parameters:\n"
          << "  -i    Input voltage range (e.g. -i 0.03 0.6)\n"
@@ -85,7 +84,7 @@ Config parse_args(int argc, char* argv[]) {
     cfg.x2 = 600;
     cfg.Vmin = 1000;
     cfg.Vmax = 2000;
-    cfg.step = 1;
+    cfg.step = 0.1;
     return cfg;
 }
 
@@ -95,7 +94,7 @@ void show_progress(double percentage) {
 
     cout << COLOR_CYAN "\r[";
     for (int i = 0; i < bar_width; ++i) {
-        cout << (i <= pos ? PROGRESS_BAR : " ");
+        cout << (i <= pos ? "#" : " ");
     }
     cout << "] " << fixed << setprecision(1) << percentage * 100.0 << "%";
     cout.flush();
@@ -117,27 +116,28 @@ vector<Solution> find_solutions(const Config& cfg) {
                         O1*O2, O1*O2max,
                         O1max*O2, O1max*O2max
                     };
-                    sort(gains.rbegin(), gains.rend());
+                    sort(gains.begin(), gains.end()); // 改为升序排序
 
-                    // 快速过滤条件
-                    if (gains.back()*cfg.x2 < cfg.Vmin) continue;
-                    if (gains.front()*cfg.x1 > cfg.Vmax) continue;
-
-                    // 计算分割点
-                    vector<double> thresholds = {
-                        min(cfg.Vmax/gains[0], cfg.x2),
-                        min(cfg.Vmax/gains[1], cfg.x2),
-                        min(cfg.Vmax/gains[2], cfg.x2)
-                    };
-
-                    // 验证区间
-                    if (!is_sorted(thresholds.begin(), thresholds.end(),
-                        [&](double a, double b){ return a <= b + EPSILON; })) continue;
-
-                    // 验证输出范围
+                    // 新验证逻辑：所有增益的输出范围都必须在[Vmin, Vmax]内
                     bool valid = true;
-                    valid &= (gains[0]*cfg.x1 >= cfg.Vmin - EPSILON);
-                    valid &= (gains[3]*cfg.x2 <= cfg.Vmax + EPSILON);
+                    vector<double> thresholds(3);
+
+                    // 计算分割点并验证
+                    thresholds[0] = cfg.Vmin / gains[0];
+                    thresholds[1] = cfg.Vmin / gains[1];
+                    thresholds[2] = cfg.Vmin / gains[2];
+
+                    // 确保分割点顺序
+                    if (!(cfg.x1 <= thresholds[0] &&
+                        thresholds[0] <= thresholds[1] &&
+                        thresholds[1] <= thresholds[2] &&
+                        thresholds[2] <= cfg.x2)) continue;
+
+                    // 验证每个区间的输出范围
+                    valid &= (gains[0] * thresholds[0] <= cfg.Vmax + EPSILON);
+                    valid &= (gains[1] * thresholds[1] <= cfg.Vmax + EPSILON);
+                    valid &= (gains[2] * thresholds[2] <= cfg.Vmax + EPSILON);
+                    valid &= (gains[3] * cfg.x2 <= cfg.Vmax + EPSILON);
 
                     if (valid) {
                         solutions.push_back({
@@ -155,15 +155,16 @@ vector<Solution> find_solutions(const Config& cfg) {
 void print_solutions(const vector<Solution>& sols, const Config& cfg) {
     cout << COLOR_RESET "\n\nFound " << sols.size() << " valid solutions:\n";
 
-    for (const auto& sol : sols) {
-        cout << COLOR_GREEN "\n=============================\n" COLOR_RESET;
+    for (size_t i=0; i<sols.size(); ++i) {
+        const auto& sol = sols[i];
+        cout << COLOR_GREEN "\n# Solution " << i+1 << " #####################\n" COLOR_RESET;
         cout << "Stage 1: [" << sol.O1min << " ~ " << sol.O1max << "]\n";
         cout << "Stage 2: [" << sol.O2min << " ~ " << sol.O2max << "]\n";
 
         cout << COLOR_YELLOW "Gains: ";
         for (auto g : sol.gains) cout << g << " ";
         cout << COLOR_RESET "\nThresholds: ";
-        for (const auto t : sol.thresholds) cout << t << " ";
+        for (auto t : sol.thresholds) cout << t << " ";
 
         // 显示详细输出范围
         cout << "\nOutput Ranges:\n";
@@ -174,11 +175,21 @@ void print_solutions(const vector<Solution>& sols, const Config& cfg) {
             {sol.thresholds[2], cfg.x2}
         };
 
-        for (size_t i=0; i<4; ++i) {
-            double min_out = ranges[i].first * sol.gains[i];
-            double max_out = ranges[i].second * sol.gains[i];
-            printf("[%5.3f, %5.3f] => [%5.3f, %5.3f]\n",
-                  ranges[i].first, ranges[i].second, min_out, max_out);
+        for (size_t j=0; j<4; ++j) {
+            double min_in = ranges[j].first;
+            double max_in = ranges[j].second;
+            double gain = sol.gains[j];
+            double min_out = min_in * gain;
+            double max_out = max_in * gain;
+
+            // 新验证条件：输出范围必须在[Vmin, Vmax]内
+            bool range_valid = (min_out >= cfg.Vmin - EPSILON) &&
+                              (max_out <= cfg.Vmax + EPSILON);
+
+            printf("[%5.3f, %5.3f] => [%5.3f, %5.3f] %s\n",
+                  min_in, max_in,
+                  min_out, max_out,
+                  range_valid ? COLOR_GREEN "✓" COLOR_RESET : COLOR_YELLOW "⚠" COLOR_RESET);
         }
     }
 }
