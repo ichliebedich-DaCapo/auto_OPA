@@ -5,6 +5,9 @@
 #include <iomanip>
 #include <string>
 #include <sstream>
+#include <thread>
+#include <mutex>
+#include <atomic>
 
 using namespace std;
 
@@ -23,9 +26,11 @@ struct Config {
     double x1, x2;
     double Vmin, Vmax;
     double step = 1.0;
+    int threads = thread::hardware_concurrency();
 
     bool validate() const {
-        return (x1 < x2) && (Vmin < Vmax) && (step > EPSILON);
+        return (x1 < x2) && (Vmin < Vmax) &&
+               (step > EPSILON) && (threads > 0);
     }
 };
 
@@ -36,24 +41,31 @@ struct Solution {
     vector<double> thresholds;
 };
 
+// 全局共享数据
+mutex solutions_mutex;
+vector<Solution> global_solutions;
+atomic<int> processed_counter(0);
+double total_iterations = 0;
+
 void print_help() {
     cout << COLOR_YELLOW
-         << "Two-stage Amplifier Optimizer (v2.1)\n"
+         << "Two-stage Amplifier Optimizer (Parallel v2.2)\n"
          << COLOR_RESET "Usage: ./amplifier -i <in_min> <in_max> -o <out_min> <out_max> [options]\n\n"
          << "Required Parameters:\n"
          << "  -i    Input voltage range (e.g. -i 0.03 0.6)\n"
          << "  -o    Output voltage range (e.g. -o 1 1.9)\n\n"
          << "Options:\n"
          << "  -s    Gain step size (default: 1.0)\n"
+         << "  -j    Thread number (default: CPU cores)\n"
          << "  -h    Show this help\n\n"
-         << COLOR_GREEN "Example: ./amplifier -i 0.03 0.6 -o 1 1.9 -s 0.5\n"
+         << COLOR_GREEN "Example: ./amplifier -i 0.03 0.6 -o 1 1.9 -s 0.5 -j 8\n"
          << COLOR_RESET;
 }
 
 Config parse_args(int argc, char* argv[]) {
     Config cfg = {0};
     bool has_i = false, has_o = false;
-
+    //
     // for (int i = 1; i < argc; ++i) {
     //     string arg = argv[i];
     //     if (arg == "-i" && i+2 < argc) {
@@ -66,6 +78,8 @@ Config parse_args(int argc, char* argv[]) {
     //         has_o = true;
     //     } else if (arg == "-s" && i+1 < argc) {
     //         cfg.step = stod(argv[++i]);
+    //     } else if (arg == "-j" && i+1 < argc) {
+    //         cfg.threads = stoi(argv[++i]);
     //     } else if (arg == "-h") {
     //         print_help();
     //         exit(0);
@@ -84,29 +98,31 @@ Config parse_args(int argc, char* argv[]) {
     cfg.x2 = 600;
     cfg.Vmin = 1000;
     cfg.Vmax = 2000;
-    cfg.step = 0.1;
+    cfg.step = 0.2;
+    cfg.threads = 16;
     return cfg;
 }
 
-void show_progress(double percentage) {
+void update_progress() {
     const int bar_width = 50;
-    int pos = bar_width * percentage;
+    while (processed_counter < total_iterations) {
+        double percentage = processed_counter / total_iterations;
+        int pos = bar_width * percentage;
 
-    cout << COLOR_CYAN "\r[";
-    for (int i = 0; i < bar_width; ++i) {
-        cout << (i <= pos ? "#" : " ");
+        cout << COLOR_CYAN "\r[";
+        for (int i = 0; i < bar_width; ++i) {
+            cout << (i <= pos ? "#" : " ");
+        }
+        cout << "] " << fixed << setprecision(1) << percentage * 100.0 << "%";
+        cout.flush();
+        this_thread::sleep_for(chrono::milliseconds(100));
     }
-    cout << "] " << fixed << setprecision(1) << percentage * 100.0 << "%";
-    cout.flush();
 }
 
-vector<Solution> find_solutions(const Config& cfg) {
-    vector<Solution> solutions;
-    const double total = (MAX_GAIN - MIN_GAIN)/cfg.step;
-    double processed = 0;
-
-    for (double O1 = MIN_GAIN; O1 <= MAX_GAIN + EPSILON; O1 += cfg.step) {
-        show_progress(processed++ / total);
+void worker_thread(const Config& cfg, double start, double end) {
+    for (double O1 = start; O1 < end; O1 += cfg.step) {
+        // 确保不超过MAX_GAIN
+        O1 = min(O1, MAX_GAIN);
 
         for (double O1max = O1 + cfg.step; O1max <= MAX_GAIN + EPSILON; O1max += cfg.step) {
             for (double O2 = MIN_GAIN; O2 <= MAX_GAIN + EPSILON; O2 += cfg.step) {
@@ -116,40 +132,69 @@ vector<Solution> find_solutions(const Config& cfg) {
                         O1*O2, O1*O2max,
                         O1max*O2, O1max*O2max
                     };
-                    sort(gains.begin(), gains.end()); // 改为升序排序
+                    sort(gains.begin(), gains.end());
 
-                    // 新验证逻辑：所有增益的输出范围都必须在[Vmin, Vmax]内
-                    bool valid = true;
-                    vector<double> thresholds(3);
+                    // 验证逻辑
+                    vector<double> thresholds = {
+                        cfg.Vmin / gains[0],
+                        cfg.Vmin / gains[1],
+                        cfg.Vmin / gains[2]
+                    };
 
-                    // 计算分割点并验证
-                    thresholds[0] = cfg.Vmin / gains[0];
-                    thresholds[1] = cfg.Vmin / gains[1];
-                    thresholds[2] = cfg.Vmin / gains[2];
-
-                    // 确保分割点顺序
                     if (!(cfg.x1 <= thresholds[0] &&
                         thresholds[0] <= thresholds[1] &&
                         thresholds[1] <= thresholds[2] &&
                         thresholds[2] <= cfg.x2)) continue;
 
-                    // 验证每个区间的输出范围
+                    bool valid = true;
                     valid &= (gains[0] * thresholds[0] <= cfg.Vmax + EPSILON);
                     valid &= (gains[1] * thresholds[1] <= cfg.Vmax + EPSILON);
                     valid &= (gains[2] * thresholds[2] <= cfg.Vmax + EPSILON);
                     valid &= (gains[3] * cfg.x2 <= cfg.Vmax + EPSILON);
 
                     if (valid) {
-                        solutions.push_back({
+                        Solution sol{
                             O1, O1max, O2, O2max,
                             gains, thresholds
-                        });
+                        };
+
+                        lock_guard<mutex> lock(solutions_mutex);
+                        global_solutions.push_back(sol);
                     }
                 }
             }
         }
+        ++processed_counter;
     }
-    return solutions;
+}
+
+vector<Solution> parallel_search(const Config& cfg) {
+    vector<thread> threads;
+    const double range = MAX_GAIN - MIN_GAIN;
+    const double chunk_size = range / cfg.threads;
+
+    // 计算总迭代次数用于进度条
+    total_iterations = (MAX_GAIN - MIN_GAIN) / cfg.step + 1;
+
+    // 启动进度显示线程
+    thread progress_thread(update_progress);
+
+    // 创建工作线程
+    for (int i = 0; i < cfg.threads; ++i) {
+        double start = MIN_GAIN + i * chunk_size;
+        double end = start + chunk_size;
+        threads.emplace_back(worker_thread, cref(cfg), start, end);
+    }
+
+    // 等待工作线程完成
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    // 等待进度条线程结束
+    progress_thread.join();
+
+    return global_solutions;
 }
 
 void print_solutions(const vector<Solution>& sols, const Config& cfg) {
@@ -200,9 +245,10 @@ int main(int argc, char* argv[]) {
     cout << COLOR_YELLOW "\nSearch Parameters:" COLOR_RESET
          << "\nInput:  [" << cfg.x1 << ", " << cfg.x2 << "]"
          << "\nOutput: [" << cfg.Vmin << ", " << cfg.Vmax << "]"
-         << "\nStep:   " << cfg.step << "\n\n";
+         << "\nStep:   " << cfg.step
+         << "\nThreads: " << cfg.threads << "\n\n";
 
-    auto solutions = find_solutions(cfg);
+    auto solutions = parallel_search(cfg);
     print_solutions(solutions, cfg);
 
     cout << COLOR_GREEN "\nSearch completed." COLOR_RESET << endl;
