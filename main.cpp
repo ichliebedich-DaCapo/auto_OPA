@@ -230,16 +230,29 @@ int main(int argc, char *argv[])
         out << "O2: [" << O2min << ", " << O2max << "]\n";
         out << "Gains: ";
         for (auto g: gains) out << g << " ";
-        out << "\nSplit Points: ";
-        for (auto s: split_points) out << s << " ";
-        // 增益区间范围
-        out << "\nGains Zone: ";
-        double gains_zone_low = x1;
+        out << "\nSplit Zone: ";
+        // 子区间
+        double zone[]={x1, split_points[0], split_points[1], split_points[2], x2};
         for (int n = 0; n < 4; ++n)
         {
-            out << "[" << gains[n] * gains_zone_low << "," << gains[n] * (n == 3 ? x2 : split_points[n]) << "] ";
-            gains_zone_low = split_points[n];
+            out << "\n[" << zone[n] << "," << zone[n + 1] << "]\t\t"<<
+                "[" << gains[n] * zone[n] << "," << gains[n]*zone[n + 1] << "]";
         }
+        // double split_zone_low = x1;
+        // for (auto s: split_points)
+        // {
+        //     out <<"["<<split_zone_low<<","<< s << "] ";
+        //     split_zone_low = s;
+        // }
+        // out <<"["<<split_zone_low<<","<< x2 << "] ";
+        // // 增益区间范围
+        // out << "\nGains Zone: ";
+        // double gains_zone_low = x1;
+        // for (int n = 0; n < 4; ++n)
+        // {
+        //     out << "[" << gains[n] * gains_zone_low << "," << gains[n] * (n == 3 ? x2 : split_points[n]) << "] ";
+        //     gains_zone_low = split_points[n];
+        // }
         out << "\n\n";
     }
 
